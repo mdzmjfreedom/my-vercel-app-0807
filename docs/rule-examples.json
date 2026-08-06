@@ -1,0 +1,237 @@
+[
+  {
+    "scenario": "黎明屯配送发货单 Excel：干扰头部 + 尾部收货信息",
+    "rule": {
+      "ruleName": "示例-尾部元信息表格",
+      "fileType": "excel",
+      "mode": "table",
+      "sheetMode": "first",
+      "table": {
+        "headerRow": 3,
+        "dataStartRow": 4,
+        "stopWhenFirstCellMatches": "^(合计|总计|小计)",
+        "skipWhenFirstCellMatches": "^(合计|总计|小计)",
+        "fieldMappings": {
+          "externalCode": { "kind": "column", "fallbackHeaders": ["配送单号", "单据号", "外部编码"] },
+          "skuCode": { "kind": "column", "fallbackHeaders": ["物品编码", "SKU物品编码", "商品编码"] },
+          "skuName": { "kind": "column", "fallbackHeaders": ["物品名称", "SKU物品名称", "商品名称"] },
+          "qty": { "kind": "column", "fallbackHeaders": ["发货数量", "SKU发货数量", "数量"] },
+          "skuSpec": { "kind": "column", "fallbackHeaders": ["规格型号", "规格"] },
+          "remark": { "kind": "column", "fallbackHeaders": ["备注"] }
+        },
+        "contextMappings": {
+          "receiverName": { "kind": "label", "label": "收货人|收件人|联系人", "offsetCols": 1, "searchFromRow": 6 },
+          "receiverPhone": { "kind": "label", "label": "收货电话|电话|联系电话", "offsetCols": 1, "searchFromRow": 6 },
+          "receiverAddress": { "kind": "label", "label": "收货地址|地址", "offsetCols": 1, "searchFromRow": 6 }
+        }
+      },
+      "notes": [
+        { "message": "表头、数据起始行和尾部标签位置需按样例文件确认。", "confidence": "medium" }
+      ]
+    }
+  },
+  {
+    "scenario": "湖南仓发货明细 Excel：同配送单号多 SKU 聚合",
+    "rule": {
+      "ruleName": "示例-配送单号跨行聚合表格",
+      "fileType": "excel",
+      "mode": "table",
+      "sheetMode": "first",
+      "table": {
+        "headerRow": 1,
+        "dataStartRow": 2,
+        "skipBlankRows": true,
+        "fieldMappings": {
+          "externalCode": { "kind": "column", "fallbackHeaders": ["配送单号", "单据号", "外部编码"] },
+          "receiverShop": { "kind": "column", "fallbackHeaders": ["收货机构", "收货门店", "门店"] },
+          "receiverName": { "kind": "column", "fallbackHeaders": ["收货人", "联系人"] },
+          "receiverPhone": { "kind": "column", "fallbackHeaders": ["收货电话", "联系电话", "电话"] },
+          "receiverAddress": { "kind": "column", "fallbackHeaders": ["收货地址", "地址"] },
+          "skuCode": { "kind": "column", "fallbackHeaders": ["物品编码", "SKU编码", "商品编码"] },
+          "skuName": { "kind": "column", "fallbackHeaders": ["物品名称", "SKU名称", "商品名称"] },
+          "qty": { "kind": "column", "fallbackHeaders": ["实发数量", "出库数量", "发货数量", "数量"] },
+          "skuSpec": { "kind": "column", "fallbackHeaders": ["规格型号", "规格"] }
+        }
+      },
+      "notes": [
+        { "message": "同一 externalCode 的多行会在预览页聚合为一个出库单。", "confidence": "high" }
+      ]
+    }
+  },
+  {
+    "scenario": "欢乐牧场模板 Excel：SKU x 门店矩阵转置",
+    "rule": {
+      "ruleName": "示例-SKU门店矩阵转置",
+      "fileType": "excel",
+      "mode": "matrix",
+      "sheetMode": "first",
+      "matrix": {
+        "headerRow": 0,
+        "dataStartRow": 1,
+        "quantityColumnStart": 13,
+        "quantityColumnEnd": 17,
+        "skuMappings": {
+          "skuCode": { "kind": "column", "fallbackHeaders": ["外部商品编码", "SKU条码", "物品编码", "商品编码"] },
+          "skuName": { "kind": "column", "fallbackHeaders": ["SKU名称", "物品名称", "商品名称"] },
+          "skuSpec": { "kind": "column", "fallbackHeaders": ["规格", "规格型号"] }
+        },
+        "externalCodeTemplate": "{{sheetName}}-{{columnLabel}}"
+      },
+      "notes": [
+        { "message": "quantityColumnStart 之后的列头会作为收货门店，非正数量会被忽略。", "confidence": "medium" }
+      ]
+    }
+  },
+  {
+    "scenario": "黔寨寨配送单 PDF：正文表格 + 底部收货信息",
+    "rule": {
+      "ruleName": "示例-PDF序列文本",
+      "fileType": "pdf",
+      "mode": "text-sequence",
+      "textSequence": {
+        "itemCodePattern": "^[A-Z0-9][A-Z0-9_-]{4,}$",
+        "itemFieldOrder": ["skuCode", "skuName", "skuSpec", "qty"],
+        "contextMappings": {
+          "externalCode": { "kind": "regex", "pattern": "(?:配送单号|单据号)[:：]?\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverName": { "kind": "regex", "pattern": "(?:收货人|签收人)[:：]?\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverPhone": { "kind": "regex", "pattern": "(?:收货电话|联系电话|电话)[:：]?\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverAddress": { "kind": "regex", "pattern": "(?:收货地址|地址)[:：]?\\s*([^\\n]+)", "group": 1 }
+        }
+      },
+      "notes": [
+        { "message": "PDF 先抽文本，再按 SKU 编码附近的连续行组成明细。", "confidence": "medium" }
+      ]
+    }
+  },
+  {
+    "scenario": "多门店分 Sheet 出库单 Excel：遍历所有 Sheet",
+    "rule": {
+      "ruleName": "示例-多Sheet独立门店",
+      "fileType": "excel",
+      "mode": "table",
+      "sheetMode": "all",
+      "table": {
+        "headerRow": 3,
+        "dataStartRow": 4,
+        "stopWhenFirstCellMatches": "^(合计|总计|小计)",
+        "fieldMappings": {
+          "externalCode": { "kind": "sheetName" },
+          "skuCode": { "kind": "column", "fallbackHeaders": ["物品编码", "SKU编码", "商品编码"] },
+          "skuName": { "kind": "column", "fallbackHeaders": ["物品名称", "SKU名称", "商品名称"] },
+          "qty": { "kind": "column", "fallbackHeaders": ["发货数量", "出库数量", "数量"] },
+          "skuSpec": { "kind": "column", "fallbackHeaders": ["规格型号", "规格"] }
+        },
+        "contextMappings": {
+          "receiverShop": { "kind": "sheetName" },
+          "receiverName": { "kind": "label", "label": "收货人|联系人", "offsetCols": 1, "searchFromRow": 13 },
+          "receiverPhone": { "kind": "label", "label": "电话|联系电话", "offsetCols": 1, "searchFromRow": 13 },
+          "receiverAddress": { "kind": "label", "label": "地址|收货地址", "offsetCols": 1, "searchFromRow": 13 }
+        }
+      },
+      "notes": [
+        { "message": "sheetMode=all 会把每个 Sheet 的解析结果合并。", "confidence": "high" }
+      ]
+    }
+  },
+  {
+    "scenario": "门店调拨单 Excel：卡片式堆叠",
+    "rule": {
+      "ruleName": "示例-卡片式调拨单",
+      "fileType": "excel",
+      "mode": "cards",
+      "sheetMode": "all",
+      "cards": {
+        "cardStartPattern": "^(▶|>|#)?\\s*(调拨记录|配送单|记录)\\s*#?\\d+",
+        "itemHeaderPattern": "物品编码|SKU|商品编码",
+        "stopAtBlankRows": 1,
+        "infoMappings": {
+          "externalCode": { "kind": "cardIndex", "prefix": "CARD" },
+          "receiverShop": { "kind": "label", "label": "调入门店|收货门店", "offsetCols": 1 },
+          "receiverName": { "kind": "label", "label": "收货人|联系人", "offsetCols": 1 },
+          "receiverPhone": { "kind": "label", "label": "电话|联系电话", "offsetCols": 1 },
+          "receiverAddress": { "kind": "label", "label": "收货地址|地址", "offsetCols": 1 }
+        },
+        "itemMappings": {
+          "skuCode": { "kind": "column", "fallbackHeaders": ["物品编码", "SKU编码", "商品编码"] },
+          "skuName": { "kind": "column", "fallbackHeaders": ["物品名称", "SKU名称", "商品名称"] },
+          "skuSpec": { "kind": "column", "fallbackHeaders": ["规格", "规格型号"] },
+          "qty": { "kind": "column", "fallbackHeaders": ["数量", "发货数量", "调拨数量"] }
+        }
+      },
+      "notes": [
+        { "message": "每个卡片先抽收货信息，再解析卡片内小表。", "confidence": "high" }
+      ]
+    }
+  },
+  {
+    "scenario": "门店配送确认单 Word：纯文本分隔记录",
+    "rule": {
+      "ruleName": "示例-Word分隔文本正则",
+      "fileType": "word",
+      "mode": "text-regex",
+      "textRegex": {
+        "recordSeparatorPattern": "━{3,}|-{3,}",
+        "itemLinePattern": "(?:\\d+[.、]\\s*)?(?<skuCode>[A-Z0-9_-]{4,})\\s*[|｜]\\s*(?<skuName>[^|｜\\n]+)\\s*[|｜]\\s*(?<skuSpec>[^|｜\\n]*)\\s*[|｜]\\s*(?<qty>\\d+(?:\\.\\d+)?)",
+        "contextMappings": {
+          "externalCode": { "kind": "regex", "pattern": "(?:配送单号|单据号)[:：]\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverShop": { "kind": "regex", "pattern": "(?:门店|收货门店)[:：]\\s*([^\\n]+)", "group": 1 },
+          "receiverName": { "kind": "regex", "pattern": "(?:收货人|联系人)[:：]\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverPhone": { "kind": "regex", "pattern": "(?:电话|联系电话)[:：]\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverAddress": { "kind": "regex", "pattern": "(?:地址|收货地址)[:：]\\s*([^\\n]+)", "group": 1 }
+        }
+      },
+      "notes": [
+        { "message": "recordSeparatorPattern 会先切块，每块内独立抽收货信息和物品行。", "confidence": "medium" }
+      ]
+    }
+  },
+  {
+    "scenario": "周配送计划 Excel：门店 x 日期网格 + 复合单元格拆分",
+    "rule": {
+      "ruleName": "示例-周计划复合网格",
+      "fileType": "excel",
+      "mode": "grid",
+      "sheetMode": "first",
+      "grid": {
+        "headerRow": 0,
+        "dataStartRow": 1,
+        "valueColumnStart": 2,
+        "rowMappings": {
+          "receiverShop": { "kind": "column", "index": 0, "fallbackHeaders": ["门店", "收货门店", "店名"] },
+          "receiverName": { "kind": "column", "fallbackHeaders": ["收货人", "联系人"] },
+          "receiverPhone": { "kind": "column", "fallbackHeaders": ["电话", "联系电话"] },
+          "receiverAddress": { "kind": "column", "fallbackHeaders": ["地址", "收货地址"] }
+        },
+        "itemSeparatorPattern": "[\\n；;]+",
+        "itemPattern": "^(.+?)(?:\\s*[xX×*]\\s*|[:：]\\s*|\\s+)(\\d+(?:\\.\\d+)?)$",
+        "externalCodeTemplate": "{{sheetName}}-{{rowIndex}}-{{columnLabel}}",
+        "skuCodeFallback": "skuName"
+      },
+      "notes": [
+        { "message": "每个日期列的复合单元格会拆为多条 SKU 明细。", "confidence": "high" }
+      ]
+    }
+  },
+  {
+    "scenario": "配送签收单多单 PDF：一个 PDF 拆多单",
+    "rule": {
+      "ruleName": "示例-PDF多单文本正则",
+      "fileType": "pdf",
+      "mode": "text-regex",
+      "textRegex": {
+        "recordSeparatorPattern": "={5,}|-{5,}|配送签收单",
+        "itemLinePattern": "(?<skuCode>[A-Z0-9_-]{4,})\\s+(?<skuName>[^\\n\\d]+?)\\s+(?<skuSpec>\\S*)\\s+(?<qty>\\d+(?:\\.\\d+)?)",
+        "contextMappings": {
+          "externalCode": { "kind": "regex", "pattern": "(?:签收单号|配送单号|单据号)[:：]?\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverShop": { "kind": "regex", "pattern": "(?:收货门店|门店)[:：]?\\s*([^\\n]+)", "group": 1 },
+          "receiverName": { "kind": "regex", "pattern": "(?:收货人|签收人)[:：]?\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverPhone": { "kind": "regex", "pattern": "(?:电话|联系电话)[:：]?\\s*([^\\n\\s]+)", "group": 1 },
+          "receiverAddress": { "kind": "regex", "pattern": "(?:地址|收货地址)[:：]?\\s*([^\\n]+)", "group": 1 }
+        }
+      },
+      "notes": [
+        { "message": "每个文本块对应一张签收单，物品行与该块的收货信息配对。", "confidence": "medium" }
+      ]
+    }
+  }
+]

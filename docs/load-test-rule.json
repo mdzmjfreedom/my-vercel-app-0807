@@ -1,0 +1,23 @@
+{
+  "ruleName": "V4 压测订单表规则",
+  "fileType": "excel",
+  "mode": "table",
+  "sheetMode": "first",
+  "table": {
+    "headerRow": 0,
+    "dataStartRow": 1,
+    "skipBlankRows": true,
+    "fieldMappings": {
+      "externalCode": { "kind": "column", "header": "外部编码" },
+      "receiverShop": { "kind": "column", "header": "收货门店" },
+      "receiverName": { "kind": "column", "header": "收件人姓名" },
+      "receiverPhone": { "kind": "column", "header": "收件人电话" },
+      "receiverAddress": { "kind": "column", "header": "收件人地址" },
+      "skuCode": { "kind": "column", "header": "SKU物品编码" },
+      "skuName": { "kind": "column", "header": "SKU物品名称" },
+      "qty": { "kind": "column", "header": "SKU发货数量" },
+      "skuSpec": { "kind": "column", "header": "SKU规格型号" },
+      "remark": { "kind": "column", "header": "备注" }
+    }
+  }
+}

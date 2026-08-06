@@ -1,0 +1,34 @@
+.v4-throughput-chart {
+  height: 170px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+  padding: 14px 8px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.v4-throughput-chart > div {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.v4-throughput-chart b,
+.v4-throughput-chart span {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.v4-throughput-chart b { color: var(--text-secondary); }
+.v4-throughput-chart span { color: var(--text-tertiary); }
+
+.v4-throughput-chart i {
+  width: min(60px, 70%);
+  min-height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--primary);
+}

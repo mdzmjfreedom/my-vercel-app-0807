@@ -1,0 +1,225 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL")
+  directUrl = env("POSTGRES_URL_NON_POOLING")
+}
+
+model ParseRule {
+  id         String   @id @default(uuid())
+  ruleName   String
+  fileType   String // "excel", "word", "pdf"
+  configJson String // JSON string of the rule configuration
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Order {
+  id              String   @id @default(uuid())
+  externalCode    String? // 外部编码
+  receiverShop    String? // 收货门店
+  receiverName    String? // 收件人姓名
+  receiverPhone   String? // 收件人电话
+  receiverAddress String? // 收件人地址
+  skuCode         String // SKU 物品编码
+  skuName         String // SKU 物品名称
+  qty             Int // SKU 发货数量
+  skuSpec         String? // SKU 规格型号
+  remark          String? // 备注
+  createdAt       DateTime @default(now())
+  dedupeKey       String?  @unique
+
+  @@map("ImportedOrder")
+}
+
+model SkuMaster {
+  id        String   @id @default(uuid())
+  skuCode   String   @unique
+  name      String
+  spec      String?
+  unit      String   @default("件")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("sku_master")
+}
+
+model ImportTask {
+  id               String    @id
+  fileName         String
+  filePath         String
+  ruleId           String?
+  ruleJson         String
+  status           String    @default("PENDING")
+  totalRows        Int       @default(0)
+  processedRows    Int       @default(0)
+  successRows      Int       @default(0)
+  failedRows       Int       @default(0)
+  totalBatches     Int       @default(0)
+  completedBatches Int       @default(0)
+  traceId          String    @unique
+  degraded         Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  completedAt      DateTime?
+
+  batches      ImportTaskBatch[]
+  errors       ImportTaskError[]
+  performance  BatchPerformanceLog[]
+  traces       TraceEvent[]
+  outboxEvents EventOutbox[]
+
+  @@index([status, createdAt])
+  @@map("import_tasks")
+}
+
+model ImportTaskBatch {
+  id            String    @id
+  taskId        String
+  unitId        String
+  batchIndex    Int
+  startRow      Int
+  endRow        Int
+  status        String    @default("PENDING")
+  retryCount    Int       @default(0)
+  processedRows Int       @default(0)
+  successRows   Int       @default(0)
+  failedRows    Int       @default(0)
+  lockedAt      DateTime?
+  completedAt   DateTime?
+  lastError     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  task         ImportTask            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  errors       ImportTaskError[]
+  performance  BatchPerformanceLog[]
+  traces       TraceEvent[]
+  outboxEvents EventOutbox[]
+
+  @@unique([taskId, unitId])
+  @@index([taskId, status])
+  @@map("import_task_batches")
+}
+
+model ImportTaskError {
+  id          String   @id @default(uuid())
+  taskId      String
+  batchId     String
+  unitId      String
+  batchIndex  Int
+  rowNumber   Int
+  fieldName   String?
+  rawValue    String?
+  errorCode   String
+  errorReason String
+  traceId     String
+  createdAt   DateTime @default(now())
+
+  task  ImportTask      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  batch ImportTaskBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, unitId, rowNumber, fieldName, errorCode])
+  @@index([taskId, unitId])
+  @@index([taskId, errorCode])
+  @@index([traceId, rowNumber])
+  @@map("import_task_errors")
+}
+
+model EventOutbox {
+  id            String    @id
+  aggregateId   String
+  eventType     String
+  schemaVersion Int       @default(1)
+  payload       String
+  status        String    @default("PENDING")
+  retryCount    Int       @default(0)
+  nextRetryAt   DateTime  @default(now())
+  traceId       String
+  taskId        String
+  unitId        String?
+  batchId       String?
+  createdAt     DateTime  @default(now())
+  sentAt        DateTime?
+  lastError     String?
+
+  task  ImportTask       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  batch ImportTaskBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextRetryAt])
+  @@index([traceId, createdAt])
+  @@map("event_outbox")
+}
+
+model BatchPerformanceLog {
+  id                 String   @id @default(uuid())
+  taskId             String
+  batchId            String
+  unitId             String
+  batchIndex         Int
+  parseDurationMs    Int      @default(0)
+  ruleDurationMs     Int      @default(0)
+  validateDurationMs Int      @default(0)
+  insertDurationMs   Int      @default(0)
+  totalDurationMs    Int      @default(0)
+  status             String
+  traceId            String
+  createdAt          DateTime @default(now())
+
+  task  ImportTask      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  batch ImportTaskBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, unitId])
+  @@map("batch_performance_log")
+}
+
+model TraceEvent {
+  id          String   @id @default(uuid())
+  traceId     String
+  taskId      String
+  unitId      String?
+  batchId     String?
+  eventName   String
+  eventStatus String
+  message     String
+  metadata    String?
+  occurredAt  DateTime @default(now())
+
+  task  ImportTask       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  batch ImportTaskBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([traceId, occurredAt])
+  @@index([taskId, occurredAt])
+  @@map("trace_events")
+}
+
+model LegacyOrder {
+  id              String   @id @default(uuid())
+  externalCode    String?
+  senderName      String
+  senderPhone     String
+  senderAddress   String
+  receiverName    String
+  receiverPhone   String
+  receiverAddress String
+  weight          Float
+  count           Int
+  tempZone        String
+  remark          String?
+  createdAt       DateTime @default(now())
+
+  @@map("Order")
+}
+
+model LegacyTemplateMapping {
+  id          String   @id
+  fingerprint String   @unique
+  mapping     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+
+  @@map("TemplateMapping")
+}
