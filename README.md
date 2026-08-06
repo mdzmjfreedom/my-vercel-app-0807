@@ -77,6 +77,32 @@ OPENAI_MODEL="gpt-5.5"
 OPENAI_API_KEY="<your server-side key>"
 ```
 
+## Vercel 部署
+
+线上地址：[https://my-vercel-app-0807.vercel.app](https://my-vercel-app-0807.vercel.app)，源码仓库：[GitHub](https://github.com/mdzmjfreedom/my-vercel-app-0807)。Vercel 项目关联 GitHub `main` 分支，推送后由 Vercel 构建部署。
+
+在 Vercel Project Settings 的 Environment Variables 中配置本 README 上一节列出的变量，并分别连接 Neon PostgreSQL、Vercel Blob 和 Upstash QStash。环境变量值不提交到 Git；`.env` 只用于本地运行。部署前执行 `npx prisma db push`，部署后访问 `/api/import-monitor/summary` 可确认数据库、队列和监控接口正常。
+
+## 演示访问
+
+本考试项目没有登录拦截，不需要演示账号。考官可直接访问：
+
+- [导入页](https://my-vercel-app-0807.vercel.app/)：上传文件、选择或生成解析规则并创建任务；
+- [任务页](https://my-vercel-app-0807.vercel.app/imports/task_43c68c8ccbd4416fb1a7)：查看 10,000 行实测任务的进度、批次和错误；
+- [监控页](https://my-vercel-app-0807.vercel.app/import-monitor)：查看吞吐、队列积压、阶段分位数和错误分布；
+- [Trace 页](https://my-vercel-app-0807.vercel.app/traces/trace_ced2e5110887410cb094)：查看该压测任务的事件时间线。
+
+## 故障模拟
+
+故障模拟应在本地或独立测试部署中执行，不要临时修改正式演示环境的密钥。
+
+1. 行级业务失败：执行 `npm run seed:data` 后使用生成的 `test-data/10000-orders.xlsx` 压测。文件预置 11 行不存在的 SKU；任务应为 `PARTIAL_SUCCESS`，成功 9,989 行、失败 11 行，错误列表显示 `E001`，其余合法行继续入库。
+2. 文件准备失败：复制一份无效内容并改为 `.xlsx` 后上传。任务应进入失败/重试链路，Trace 中出现文件准备失败事件，不能生成部分批次数据。
+3. 消息投递失败：在独立测试环境配置无效的 `QSTASH_TOKEN` 后创建任务。Outbox 应保留为可重试状态并增加 `retry_count`，监控页队列积压上升；恢复正确密钥后由补投递或恢复扫描继续处理。
+4. 重复消费：在本地数据库回退模式下，对已完成 Outbox 再次调用 Worker。批次状态和唯一 `dedupeKey` 应使运单数、成功数和完成批次数保持不变。
+
+压测证据、架构、接口和提交说明见 [docs/V4-交付物详细列表.md](docs/V4-交付物详细列表.md)。
+
 ## 核心流程
 
 1. 上传 Excel / Word / PDF。
