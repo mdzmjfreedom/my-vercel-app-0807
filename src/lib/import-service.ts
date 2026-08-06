@@ -3,16 +3,13 @@ import * as XLSX from "xlsx";
 import { Prisma } from "@prisma/client";
 import { ParserEngine } from "@/lib/parser-engine";
 import { prisma } from "@/lib/prisma";
-import { readImportFile, readParsedSnapshot, saveImportFile, writeParsedSnapshot } from "@/lib/import-storage";
+import { readImportFile, readParsedBatchSnapshot, saveImportFile, writeParsedBatchSnapshots } from "@/lib/import-storage";
 import { enqueueImportEvent, hasExternalQueue } from "@/lib/import-queue";
 import type { OrderField, ParsedOrder, ParseRule } from "@/lib/types";
 import { normalizeText, toPositiveNumber, validateOrders } from "@/lib/types";
 
 export const BATCH_SIZE = Number(process.env.IMPORT_BATCH_SIZE || 500);
 export const MAX_RETRIES = Number(process.env.IMPORT_MAX_RETRIES || 3);
-
-const globalImportCache = globalThis as typeof globalThis & { parsedImportTasks?: Map<string, Promise<ParsedOrder[]>> };
-globalImportCache.parsedImportTasks ??= new Map();
 
 export type ImportEvent = {
   event_id: string;
@@ -34,50 +31,46 @@ export async function estimateFileRows(file: File): Promise<number> {
   }, 0);
 }
 
-export async function createImportTask(input: { file: File; rule: ParseRule; ruleId?: string | null }) {
+export async function createImportTask(input: {
+  file?: File;
+  filePath?: string;
+  fileName?: string;
+  totalRows?: number;
+  rule: ParseRule;
+  ruleId?: string | null;
+}) {
   const taskId = `task_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
   const traceId = `trace_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
-  const filePath = await saveImportFile(taskId, input.file);
-  const totalRows = await estimateFileRows(input.file);
-  const batches = splitRanges(Math.max(totalRows, 0), BATCH_SIZE);
+  const fileName = input.file?.name ?? input.fileName;
+  if (!fileName) throw new Error("导入文件名不能为空");
+  const filePath = input.filePath ?? (input.file ? await saveImportFile(taskId, input.file) : "");
+  if (!filePath) throw new Error("导入文件地址不能为空");
+  const totalRows = input.totalRows !== undefined
+    ? Math.max(0, Math.floor(input.totalRows))
+    : input.file
+      ? await estimateFileRows(input.file)
+      : 0;
+  const taskEvent = makeOutbox({ taskId, traceId, eventType: "ImportTaskCreated", payload: { task_id: taskId, total_rows: totalRows } });
   const task = await prisma.$transaction(async (tx) => {
     const created = await tx.importTask.create({
       data: {
         id: taskId,
         traceId,
-        fileName: input.file.name,
+        fileName,
         filePath,
         ruleId: input.ruleId || input.rule.id || null,
         ruleJson: JSON.stringify(input.rule),
         totalRows,
-        totalBatches: batches.length,
+        totalBatches: 0,
       },
     });
     await tx.traceEvent.create({
       data: { id: randomUUID(), taskId, traceId, eventName: "ImportTaskCreated", eventStatus: "INFO", message: "任务已创建，等待异步投递" },
     });
-    await tx.eventOutbox.create({
-      data: makeOutbox({ taskId, traceId, eventType: "ImportTaskCreated", payload: { task_id: taskId, total_rows: totalRows } }),
-    });
-    for (const range of batches) {
-      const unitId = `${taskId}_unit_${String(range.index).padStart(4, "0")}`;
-      const batch = await tx.importTaskBatch.create({
-        data: { id: unitId, taskId, unitId, batchIndex: range.index, startRow: range.start, endRow: range.end },
-      });
-      await tx.eventOutbox.create({
-        data: makeOutbox({
-          taskId,
-          traceId,
-          unitId,
-          batchId: batch.id,
-          eventType: "ImportBatchCreated",
-          payload: { task_id: taskId, unit_id: unitId, start_row: range.start, end_row: range.end },
-        }),
-      });
-    }
+    await tx.eventOutbox.create({ data: taskEvent });
     return created;
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
-  return { task, totalBatches: batches.length };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 15000 });
+  return { task, totalBatches: 0 };
 }
 
 export function splitRanges(totalRows: number, batchSize: number) {
@@ -103,31 +96,98 @@ function makeOutbox(input: { taskId: string; traceId: string; unitId?: string; b
 }
 
 export async function dispatchOutbox(limit = 4): Promise<number> {
-  const candidates = await prisma.eventOutbox.findMany({
-    where: { status: { in: ["PENDING", "FAILED"] }, nextRetryAt: { lte: new Date() } },
-    orderBy: { createdAt: "asc" }, take: limit,
-  });
   let dispatched = 0;
-  for (const event of candidates) {
-    const result = await prisma.eventOutbox.updateMany({ where: { id: event.id, status: event.status }, data: { status: "DISPATCHING" } });
-    if (!result.count) continue;
-    try {
-      if (!event.unitId) {
-        await prisma.eventOutbox.update({ where: { id: event.id }, data: { status: "SENT", sentAt: new Date(), lastError: null } });
-      } else if (hasExternalQueue()) {
-        await enqueueImportEvent(event.id);
-        await prisma.eventOutbox.update({ where: { id: event.id }, data: { status: "SENT", sentAt: new Date(), lastError: null } });
-      } else {
-        await prisma.eventOutbox.update({ where: { id: event.id }, data: { status: "SENT", sentAt: new Date(), lastError: null } });
-        await processImportBatch(event.id);
+  while (dispatched < limit) {
+    const candidates = await prisma.eventOutbox.findMany({
+      where: { status: { in: ["PENDING", "FAILED"] }, nextRetryAt: { lte: new Date() } },
+      orderBy: { createdAt: "asc" }, take: limit - dispatched,
+    });
+    if (!candidates.length) break;
+    for (const event of candidates) {
+      const result = await prisma.eventOutbox.updateMany({ where: { id: event.id, status: event.status }, data: { status: "DISPATCHING" } });
+      if (!result.count) continue;
+      try {
+        if (hasExternalQueue()) {
+          await enqueueImportEvent(event.id);
+          await prisma.eventOutbox.update({ where: { id: event.id }, data: { status: "SENT", sentAt: new Date(), lastError: null } });
+        } else {
+          await prisma.eventOutbox.update({ where: { id: event.id }, data: { status: "SENT", sentAt: new Date(), lastError: null } });
+          await processImportEvent(event.id);
+        }
+        dispatched += 1;
+      } catch (error) {
+        const retryCount = event.retryCount + 1;
+        await prisma.eventOutbox.update({ where: { id: event.id }, data: { status: "FAILED", retryCount, nextRetryAt: new Date(Date.now() + Math.min(60000, retryCount * 5000)), lastError: error instanceof Error ? error.message : "dispatch failed" } });
       }
-      dispatched += 1;
-    } catch (error) {
-      const retryCount = event.retryCount + 1;
-      await prisma.eventOutbox.update({ where: { id: event.id }, data: { status: "FAILED", retryCount, nextRetryAt: new Date(Date.now() + Math.min(60000, retryCount * 5000)), lastError: error instanceof Error ? error.message : "dispatch failed" } });
     }
   }
   return dispatched;
+}
+
+export async function processImportEvent(outboxId: string): Promise<void> {
+  const event = await prisma.eventOutbox.findUnique({ where: { id: outboxId }, select: { unitId: true } });
+  if (!event) return;
+  if (!event.unitId) return prepareImportTask(outboxId);
+  return processImportBatch(outboxId);
+}
+
+async function prepareImportTask(outboxId: string): Promise<void> {
+  const event = await prisma.eventOutbox.findUnique({ where: { id: outboxId }, include: { task: true } });
+  if (!event || event.unitId || event.task.totalBatches > 0) return;
+  const staleBefore = new Date(Date.now() - Number(process.env.IMPORT_BATCH_LOCK_TIMEOUT_SECONDS || 120) * 1000);
+  const claim = await prisma.importTask.updateMany({
+    where: {
+      id: event.taskId,
+      OR: [{ status: "PENDING" }, { status: "PREPARING", updatedAt: { lt: staleBefore } }],
+    },
+    data: { status: "PREPARING" },
+  });
+  if (!claim.count) {
+    const fresh = await prisma.importTask.findUnique({ where: { id: event.taskId }, select: { status: true, totalBatches: true } });
+    if (fresh?.totalBatches) return;
+    throw new Error("导入文件正在由另一个 Worker 准备");
+  }
+
+  try {
+    const rule = JSON.parse(event.task.ruleJson) as ParseRule;
+    const file = await readImportFile(event.task.filePath, event.task.fileName);
+    const rows = await ParserEngine.parse(file, rule);
+    await prisma.traceEvent.create({ data: { id: randomUUID(), taskId: event.taskId, traceId: event.traceId, eventName: "ImportFileParsed", eventStatus: rows.length ? "SUCCEEDED" : "FAILED", message: `解析得到 ${rows.length} 行，文件大小 ${file.size} 字节` } });
+    if (!rows.length) throw new Error("文件解析结果为空，请检查文件内容和解析规则");
+    const ranges = splitRanges(rows.length, BATCH_SIZE);
+    const batchRows = ranges.map((range) => {
+      const unitId = `${event.taskId}_unit_${String(range.index).padStart(4, "0")}`;
+      return { id: unitId, taskId: event.taskId, unitId, batchIndex: range.index, startRow: range.start, endRow: range.end };
+    });
+    const chunks = ranges.map((range) => rows.slice(range.start - 1, range.end));
+    await writeParsedBatchSnapshots(event.task.filePath, chunks);
+    const batchEvents = ranges.map((range, index) => {
+      const batch = batchRows[index];
+      return makeOutbox({
+        taskId: event.taskId,
+        traceId: event.traceId,
+        unitId: batch.unitId,
+        batchId: batch.id,
+        eventType: "ImportBatchCreated",
+        payload: { task_id: event.taskId, unit_id: batch.unitId, start_row: range.start, end_row: range.end },
+      });
+    });
+    await prisma.$transaction(async (tx) => {
+      await tx.importTaskBatch.createMany({ data: batchRows, skipDuplicates: true });
+      await tx.eventOutbox.createMany({ data: batchEvents, skipDuplicates: true });
+      await tx.importTask.update({ where: { id: event.taskId }, data: { status: "PROCESSING", totalRows: rows.length, totalBatches: ranges.length } });
+      await tx.eventOutbox.update({ where: { id: event.id }, data: { status: "SENT", sentAt: new Date(), lastError: null } });
+      await tx.traceEvent.create({ data: { id: randomUUID(), taskId: event.taskId, traceId: event.traceId, eventName: "ImportFilePrepared", eventStatus: "SUCCEEDED", message: `文件解析完成，生成 ${ranges.length} 个批次` } });
+    }, { timeout: 15000 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "导入文件准备失败";
+    await prisma.$transaction([
+      prisma.importTask.update({ where: { id: event.taskId }, data: { status: "PENDING" } }),
+      prisma.eventOutbox.update({ where: { id: event.id }, data: { retryCount: { increment: 1 }, lastError: message } }),
+      prisma.traceEvent.create({ data: { id: randomUUID(), taskId: event.taskId, traceId: event.traceId, eventName: "ImportFilePrepareFailed", eventStatus: "FAILED", message } }),
+    ]);
+    throw error;
+  }
 }
 
 export async function processImportBatch(outboxId: string): Promise<void> {
@@ -135,23 +195,24 @@ export async function processImportBatch(outboxId: string): Promise<void> {
   if (!event?.unitId || !event.batchId) return;
   const batch = await prisma.importTaskBatch.findUnique({ where: { id: event.batchId }, include: { task: true } });
   if (!batch) return;
-  const claim = await prisma.importTaskBatch.updateMany({ where: { id: batch.id, status: { in: ["PENDING", "RETRY"] } }, data: { status: "PROCESSING", lockedAt: new Date(), lastError: null } });
+  const staleBefore = new Date(Date.now() - Number(process.env.IMPORT_BATCH_LOCK_TIMEOUT_SECONDS || 120) * 1000);
+  const claim = await prisma.importTaskBatch.updateMany({
+    where: {
+      id: batch.id,
+      OR: [
+        { status: { in: ["PENDING", "RETRY"] } },
+        { status: "PROCESSING", lockedAt: { lt: staleBefore } },
+      ],
+    },
+    data: { status: "PROCESSING", lockedAt: new Date(), lastError: null },
+  });
   if (!claim.count) return;
   const started = performance.now();
   await addTrace(batch.task, batch, "ImportBatchStarted", "STARTED", "批次开始消费");
   try {
-    const rule = JSON.parse(batch.task.ruleJson) as ParseRule;
     const parseStarted = performance.now();
-    const allRows = await loadParsedRows(batch.task.id, batch.task.filePath, batch.task.fileName, rule);
+    const rows = await readParsedBatchSnapshot<ParsedOrder[]>(batch.task.filePath, batch.batchIndex);
     const parseDurationMs = Math.round(performance.now() - parseStarted);
-    const unknownTotal = batch.task.totalRows === 0;
-    const rows = unknownTotal ? allRows : allRows.slice(Math.max(0, batch.startRow - 1), batch.endRow);
-    if (unknownTotal) {
-      await prisma.$transaction([
-        prisma.importTask.update({ where: { id: batch.taskId }, data: { totalRows: allRows.length, totalBatches: 1 } }),
-        prisma.importTaskBatch.update({ where: { id: batch.id }, data: { endRow: Math.max(1, allRows.length) } }),
-      ]);
-    }
     const validationStarted = performance.now();
     const skuCodes = Array.from(new Set(rows.map((row) => normalizeText(row.skuCode)).filter(Boolean)));
     let knownSkus = new Set<string>();
@@ -199,6 +260,7 @@ export async function processImportBatch(outboxId: string): Promise<void> {
       await tx.batchPerformanceLog.create({ data: { taskId: batch.taskId, batchId: batch.id, unitId: batch.unitId, batchIndex: batch.batchIndex, parseDurationMs, ruleDurationMs: 0, validateDurationMs, insertDurationMs, totalDurationMs, status: failedRows ? "PARTIAL_SUCCESS" : "SUCCEEDED", traceId: batch.task.traceId } });
       const updated = await tx.importTaskBatch.updateMany({ where: { id: batch.id, status: "PROCESSING" }, data: { status: "COMPLETED", processedRows: rows.length, successRows, failedRows, completedAt: new Date() } });
       if (updated.count) await tx.importTask.update({ where: { id: batch.taskId }, data: { processedRows: { increment: rows.length }, successRows: { increment: successRows }, failedRows: { increment: failedRows }, completedBatches: { increment: 1 }, ...(degraded ? { degraded: true } : {}) } });
+      await tx.eventOutbox.update({ where: { id: event.id }, data: { status: "SENT", sentAt: new Date(), lastError: null } });
     });
     await addTrace(batch.task, batch, failedRows ? "ImportBatchSucceeded" : "ImportBatchSucceeded", failedRows ? "PARTIAL_SUCCESS" : "SUCCEEDED", `批次完成：成功 ${successRows} 行，失败 ${failedRows} 行`);
     await aggregateTask(batch.taskId);
@@ -209,27 +271,6 @@ export async function processImportBatch(outboxId: string): Promise<void> {
     await prisma.eventOutbox.update({ where: { id: event.id }, data: { status: retryCount <= MAX_RETRIES ? "FAILED" : "SENT", retryCount, nextRetryAt: new Date(Date.now() + Math.min(60000, retryCount * 5000)), lastError: message } });
     await addTrace(batch.task, batch, "ImportBatchFailed", "FAILED", `${message}；${retryCount <= MAX_RETRIES ? "将重试" : "超过最大重试次数"}`);
     await aggregateTask(batch.taskId);
-  }
-}
-
-async function loadParsedRows(taskId: string, filePath: string, fileName: string, rule: ParseRule): Promise<ParsedOrder[]> {
-  const existing = globalImportCache.parsedImportTasks!.get(taskId);
-  if (existing) return existing;
-  const pending = (async () => {
-    try {
-      return await readParsedSnapshot<ParsedOrder[]>(filePath);
-    } catch {
-      const file = await readImportFile(filePath, fileName);
-      const rows = await ParserEngine.parse(file, rule);
-      await writeParsedSnapshot(filePath, rows);
-      return rows;
-    }
-  })();
-  globalImportCache.parsedImportTasks!.set(taskId, pending);
-  try {
-    return await pending;
-  } catch (error) {
-    globalImportCache.parsedImportTasks!.delete(taskId);
     throw error;
   }
 }

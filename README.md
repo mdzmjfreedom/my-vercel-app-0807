@@ -37,7 +37,7 @@ npm run seed:data
 
 只重新生成 Excel 而不连接数据库：PowerShell 使用 `$env:GENERATE_FILE_ONLY="1"; npm run seed:data`。
 
-生产环境配置 `REDIS_URL` 后，Dispatcher 会把 Outbox 事件投递到 BullMQ，常驻消费者用 `npm run worker:start` 启动；未配置 Redis 时，本地开发使用数据库任务队列直接消费。文件持久化生产环境应将 `IMPORT_STORAGE_DIR` 挂载到持久卷或替换为对象存储。数据库连接、队列密钥和存储路径均通过环境变量配置，代码不包含真实密钥。
+生产环境连接 Upstash QStash 后，Dispatcher 只发送 `outboxId`，QStash 调用带签名校验的 `/api/import-worker/job` Vercel Route Handler 执行批次。浏览器通过 `/api/import-uploads` 获取受限上传凭证并把大文件直接写入私有 Vercel Blob，任务 API 只接收 Blob URL 和规则元数据，绕过 Vercel 函数请求体限制。未配置 QStash/Blob 时，本地开发分别使用数据库任务队列和本地文件系统。数据库、QStash、Blob 和模型密钥均通过环境变量配置，代码不包含真实密钥。
 
 ## 压测与验收
 
@@ -61,6 +61,12 @@ POSTGRES_URL_NON_POOLING=""
 OPENAI_API_KEY=""
 OPENAI_BASE_URL=""
 OPENAI_MODEL=""
+
+QSTASH_URL=""
+QSTASH_TOKEN=""
+QSTASH_CURRENT_SIGNING_KEY=""
+QSTASH_NEXT_SIGNING_KEY=""
+BLOB_READ_WRITE_TOKEN=""
 ```
 
 大模型配置只在服务端 Route Handler 中读取，没有 `NEXT_PUBLIC_` 前缀，不会进入浏览器包。考试可配置为：

@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/import-worker?limit=20",
-      "schedule": "* * * * *"
+      "path": "/api/import-worker?limit=100",
+      "schedule": "0 3 * * *"
     }
   ]
 }

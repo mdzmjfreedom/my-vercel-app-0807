@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { upload } from "@vercel/blob/client";
 import {
   ArrowRight,
   CheckCircle2,
@@ -221,11 +222,33 @@ export default function Home() {
     setProgress(8);
     setProgressMessage("正在准备解析文件...");
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("rule", JSON.stringify(rule));
       startParseProgressLoop();
-      const res = await fetch("/api/import-tasks", { method: "POST", body: form });
+      const isLocal = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+      let res: Response;
+      if (isLocal) {
+        const form = new FormData();
+        form.append("file", file);
+        form.append("rule", JSON.stringify(rule));
+        res = await fetch("/api/import-tasks", { method: "POST", body: form });
+      } else {
+        const totalRows = await countImportRows(file);
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-120) || "upload.bin";
+        const blob = await upload(`imports/client/${crypto.randomUUID()}-${safeName}`, file, {
+          access: "private",
+          handleUploadUrl: "/api/import-uploads",
+          contentType: file.type || undefined,
+          multipart: file.size >= 5 * 1024 * 1024,
+          onUploadProgress: ({ percentage }) => {
+            setProgress(Math.min(72, 12 + Math.round(percentage * 0.6)));
+            setProgressMessage(`正在上传到私有文件存储：${Math.round(percentage)}%`);
+          },
+        });
+        res = await fetch("/api/import-tasks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ blobUrl: blob.url, fileName: file.name, totalRows, rule, ruleId: selectedRuleId || undefined }),
+        });
+      }
       clearProgressTimer();
       setProgress(88);
       setProgressMessage("任务已创建，正在打开进度页...");
@@ -248,6 +271,17 @@ export default function Home() {
         setProgressMessage("");
       }, 600);
     }
+  }
+
+  async function countImportRows(source: File): Promise<number> {
+    const suffix = source.name.split(".").pop()?.toLowerCase();
+    if (suffix !== "xlsx" && suffix !== "xls") return 0;
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.read(new Uint8Array(await source.arrayBuffer()), { type: "array", dense: true, cellFormula: false });
+    return workbook.SheetNames.reduce((count, sheetName) => {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, raw: false, blankrows: false });
+      return count + Math.max(0, rows.length - 1);
+    }, 0);
   }
 
   function clearProgressTimer() {

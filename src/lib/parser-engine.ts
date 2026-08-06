@@ -137,7 +137,8 @@ function parseTable(sheet: SheetSnapshot, config: TableRuleConfig): ParsedOrder[
   const headers = rows[headerRow] ?? [];
   const start = config.dataStartRow ?? headerRow + 1;
   const end = Math.min(config.dataEndRow ?? rows.length - 1, rows.length - 1);
-  const context = resolveMappings(config.contextMappings ?? {}, { rows, headers, sheetName: sheet.name, text: flattenRows(rows) });
+  const sheetText = flattenRows(rows);
+  const context = resolveMappings(config.contextMappings ?? {}, { rows, headers, sheetName: sheet.name, text: sheetText });
   const orders: ParsedOrder[] = [];
 
   for (let rowIndex = start; rowIndex <= end; rowIndex += 1) {
@@ -155,7 +156,7 @@ function parseTable(sheet: SheetSnapshot, config: TableRuleConfig): ParsedOrder[
         rowIndex,
         headers,
         sheetName: sheet.name,
-        text: flattenRows(rows),
+        text: sheetText,
       }),
     };
 

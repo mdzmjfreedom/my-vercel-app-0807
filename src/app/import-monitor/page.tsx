@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import "./monitor.css";
 
 type Summary = {
+  queue_mode: "QSTASH" | "DATABASE_FALLBACK";
   throughput_per_minute: number;
   throughput_series: Array<{ minute: string; rows: number }>;
   queue_backlog_batches: number;
@@ -49,7 +50,7 @@ export default function ImportMonitorPage() {
         <Metric icon={<Activity />} label="实时吞吐" value={`${summary.throughput_per_minute.toLocaleString()} 行/分钟`} />
         <Metric icon={<Server />} label="队列积压" value={`${summary.queue_backlog_batches} 批`} danger={summary.queue_alert} />
         <Metric icon={<AlertTriangle />} label="近 5 分钟失败任务" value={summary.failed_tasks_5m} danger={summary.failed_tasks_5m > 0} />
-        <Metric icon={<Database />} label="Worker 模式" value="BullMQ / 批量 Worker" />
+        <Metric icon={<Database />} label="Worker 模式" value={summary.queue_mode === "QSTASH" ? "QStash / Vercel Worker" : "数据库队列 / 本地 Worker"} />
       </div>
       <section className="card">
         <div className="v4-section-head"><div><h3>过去 5 分钟成功入库行数</h3><p>按任务完成时间聚合，每分钟一个数据点。</p></div><Activity size={18} /></div>
