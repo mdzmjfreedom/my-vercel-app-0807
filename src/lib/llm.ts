@@ -11,7 +11,7 @@ type LlmConfig = {
 };
 
 const AI_SDK_TIMEOUT_MS = 12_000;
-const CHAT_COMPLETIONS_TIMEOUT_MS = 20_000;
+const CHAT_COMPLETIONS_TIMEOUT_MS = 25_000;
 const CHAT_COMPLETIONS_ATTEMPTS = 2;
 const CHAT_COMPLETIONS_RETRY_DELAY_MS = 800;
 
@@ -282,7 +282,7 @@ async function requestRuleWithChatCompletions(prompt: string, config: LlmConfig)
 function isRetryableLlmError(error: unknown): boolean {
   const message = errorMessage(error);
   return /^(?:429|5\d\d)\b/.test(message)
-    || /fetch failed|network|ECONN|ETIMEDOUT|timeout|timed out|aborted/i.test(message);
+    || /fetch failed|network|ECONN/i.test(message);
 }
 
 function delay(ms: number): Promise<void> {

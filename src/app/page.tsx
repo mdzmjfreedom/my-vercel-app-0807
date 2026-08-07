@@ -148,8 +148,18 @@ export default function Home() {
       clearProgressTimer();
       setProgress(88);
       setProgressMessage("已收到服务端响应，正在整理规则 JSON...");
-      const data = (await res.json()) as GenerateRuleResponse;
-      if (!data.success) throw new Error(data.error || "生成规则失败");
+      const responseText = await res.text();
+      let data: GenerateRuleResponse;
+      try {
+        data = JSON.parse(responseText) as GenerateRuleResponse;
+      } catch {
+        throw new Error(
+          res.ok
+            ? "规则生成接口返回格式异常，请稍后重试。"
+            : `规则生成服务暂时不可用（HTTP ${res.status || "未知"}），请稍后重试。`,
+        );
+      }
+      if (!res.ok || !data.success) throw new Error(data.error || `生成规则失败（HTTP ${res.status}）`);
       if (!data.rule) throw new Error("大模型未返回可用规则");
       setDraftRule(data.rule);
       setRuleText(JSON.stringify(data.rule, null, 2));
