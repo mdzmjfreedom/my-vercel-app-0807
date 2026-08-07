@@ -10,8 +10,10 @@ type LlmConfig = {
   model: string;
 };
 
-const AI_SDK_TIMEOUT_MS = 18_000;
-const CHAT_COMPLETIONS_TIMEOUT_MS = 45_000;
+const AI_SDK_TIMEOUT_MS = 12_000;
+const CHAT_COMPLETIONS_TIMEOUT_MS = 20_000;
+const CHAT_COMPLETIONS_ATTEMPTS = 2;
+const CHAT_COMPLETIONS_RETRY_DELAY_MS = 800;
 
 export function getLlmProviderInfo() {
   return {
@@ -183,7 +185,7 @@ export async function generateRuleWithLlm(structure: FileStructure, localRule: P
       return result.object;
     } catch (sdkError) {
       throw new Error(
-        `Chat Completions 流式调用失败：${errorMessage(chatError)}；AI SDK 兜底失败：${errorMessage(sdkError)}`,
+        `Chat Completions 调用失败：${errorMessage(chatError)}；AI SDK 兜底失败：${errorMessage(sdkError)}`,
       );
     }
   }
@@ -228,9 +230,25 @@ function getLlmConfig(): LlmConfig {
 }
 
 async function generateRuleWithChatCompletions(prompt: string, config: LlmConfig): Promise<ParseRule> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= CHAT_COMPLETIONS_ATTEMPTS; attempt += 1) {
+    try {
+      return await requestRuleWithChatCompletions(prompt, config);
+    } catch (error) {
+      lastError = error;
+      if (attempt === CHAT_COMPLETIONS_ATTEMPTS || !isRetryableLlmError(error)) throw error;
+      await delay(CHAT_COMPLETIONS_RETRY_DELAY_MS * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
+async function requestRuleWithChatCompletions(prompt: string, config: LlmConfig): Promise<ParseRule> {
   const body = {
     model: config.model,
-    stream: true,
+    stream: false,
     messages: [
       {
         role: "system",
@@ -239,7 +257,6 @@ async function generateRuleWithChatCompletions(prompt: string, config: LlmConfig
       },
       { role: "user", content: prompt },
     ],
-    response_format: { type: "json_object" },
   };
 
   const response = await fetch(`${config.baseURL}/chat/completions`, {
@@ -260,6 +277,16 @@ async function generateRuleWithChatCompletions(prompt: string, config: LlmConfig
   const content = parseChatCompletionContent(text);
   if (!content) throw new Error("大模型返回为空");
   return parseRuleSchema.parse(JSON.parse(extractJsonObject(content)));
+}
+
+function isRetryableLlmError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /^(?:429|5\d\d)\b/.test(message)
+    || /fetch failed|network|ECONN|ETIMEDOUT|timeout|timed out|aborted/i.test(message);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function parseChatCompletionContent(text: string): string {
